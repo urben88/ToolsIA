@@ -1,91 +1,165 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+Convierte el contenido de un proyecto a PDF, TXT o CSV.
+"""
+
 import os
-from fpdf import FPDF  # fpdf2 usa el mismo nombre de clase
+import csv
+from pathlib import Path
 
-def generar_arbol_directorios(base_folder, extensiones):
-    arbol = {}
-    for root, _, files in os.walk(base_folder):
-        relative_root = os.path.relpath(root, base_folder)
+try:
+    from fpdf import FPDF          # Sólo se necesita si se elige PDF
+except ImportError:
+    FPDF = None                     # Permitimos TXT/CSV aunque no esté FPDF
+
+
+EXTENSIONES = {
+    ".py", ".js", ".ts", ".html", ".css", ".json", ".java", ".c", ".cpp",
+    ".h", ".hpp", ".cs", ".php", ".rb", ".xml", ".yml", ".yaml", ".sh",
+    ".bat", ".md", ".txt", ".ini", ".cfg", ".toml", ".sql", ".jsx",
+    ".tsx", ".vue"
+}
+
+
+# --------------------------------------------------------------------------- #
+# Utilidades comunes
+# --------------------------------------------------------------------------- #
+def scan_project(base_folder: Path):
+    """
+    Recorre el directorio y devuelve:
+      1) arbol: estructura anidada { carpeta: { … , "__files__": [nombres] } }
+      2) files: lista [(ruta_relativa, [líneas de texto]), … ]
+    """
+    arbol, files = {}, []
+    for root, _, filenames in os.walk(base_folder):
+        rel_root = Path(root).relative_to(base_folder)
         current = arbol
-        if relative_root != ".":
-            for part in relative_root.split(os.sep):
+        if rel_root != Path("."):
+            for part in rel_root.parts:
                 current = current.setdefault(part, {})
-        for file in files:
-            if any(file.endswith(ext) for ext in extensiones):
-                current.setdefault("__files__", []).append(file)
-    return arbol
+        for name in filenames:
+            if any(name.endswith(ext) for ext in EXTENSIONES):
+                current.setdefault("__files__", []).append(name)
+                path = Path(root) / name
+                try:
+                    with path.open("r", encoding="utf-8", errors="ignore") as fh:
+                        files.append((path.relative_to(base_folder), fh.readlines()))
+                except Exception as e:
+                    print(f"⚠️  No se pudo leer {path}: {e}")
+    return arbol, files
 
-def escribir_arbol_en_pdf(pdf, arbol, indent=0):
-    for key, value in sorted(arbol.items()):
+
+# --------------------------------------------------------------------------- #
+# Salida PDF
+# --------------------------------------------------------------------------- #
+def arbol_pdf(pdf: "FPDF", nodo: dict, indent: int = 0):
+    for key, val in sorted(nodo.items()):
         if key == "__files__":
-            for file in sorted(value):
-                pdf.multi_cell(0, 5, " " * indent + f"- {file}", new_x="LMARGIN", new_y="NEXT")
+            for f in sorted(val):
+                pdf.multi_cell(0, 5, " " * indent + f"- {f}", new_x="LMARGIN", new_y="NEXT")
         else:
             pdf.multi_cell(0, 5, " " * indent + f"[{key}]/", new_x="LMARGIN", new_y="NEXT")
-            escribir_arbol_en_pdf(pdf, value, indent + 4)
+            arbol_pdf(pdf, val, indent + 4)
 
-def main():
-    print("📦 Convertidor de código a PDF (con rutas relativas)")
 
-    input_path = input("📂 Ruta de la carpeta del proyecto (ej: ./carpeta): ").strip('"')
-    output_name = input("📄 Nombre del archivo PDF (sin .pdf): ").strip()
-
-    if not os.path.isdir(input_path):
-        print("❌ Error: la ruta no es una carpeta válida.")
-        return
-
-    extensiones = [
-        ".py", ".js", ".ts", ".html", ".css", ".json", ".java", ".c", ".cpp", ".h", ".hpp",
-        ".cs", ".php", ".rb", ".xml", ".yml", ".yaml", ".sh", ".bat", ".md", ".txt", ".ini",
-        ".cfg", ".toml", ".sql", ".jsx", ".tsx", ".vue"
-    ]
+def export_pdf(base: Path, output: Path, arbol: dict, files: list):
+    if FPDF is None:
+        raise RuntimeError("❗ Instala primero fpdf2:  pip install fpdf2")
 
     pdf = FPDF()
     pdf.set_auto_page_break(auto=True, margin=15)
     pdf.set_font("Courier", size=10)
 
-    base_folder = os.path.abspath(input_path)
-    arbol = generar_arbol_directorios(base_folder, extensiones)
-
-    # Página inicial con resumen del árbol de archivos
+    # Portada con árbol
     pdf.add_page()
-    pdf.set_font("Courier", style='B', size=12)
-    pdf.multi_cell(0, 8, f"Resumen de archivos en:\n{input_path}\n", new_x="LMARGIN", new_y="NEXT")
+    pdf.set_font("Courier", style="B", size=12)
+    pdf.multi_cell(0, 8, f"Resumen de archivos en:\n{base}\n", new_x="LMARGIN", new_y="NEXT")
     pdf.set_font("Courier", size=10)
-    escribir_arbol_en_pdf(pdf, arbol)
+    arbol_pdf(pdf, arbol)
 
-    # Recorrido de archivos y creación de páginas
-    for root, _, files in os.walk(base_folder):
-        for file in files:
-            if any(file.endswith(ext) for ext in extensiones):
-                path = os.path.join(root, file)
-                relative_path = os.path.relpath(path, base_folder)
+    # Secciones por archivo
+    for rel_path, lines in files:
+        pdf.add_page()
+        pdf.set_font("Courier", style="B", size=11)
+        pdf.multi_cell(0, 7, f"{rel_path}\n", new_x="LMARGIN", new_y="NEXT")
+        pdf.set_font("Courier", size=9)
+        for ln in lines:
+            pdf.multi_cell(0, 5, ln.encode("latin-1", "replace").decode("latin-1"),
+                           new_x="LMARGIN", new_y="NEXT")
 
-                try:
-                    with open(path, "r", encoding="utf-8", errors="ignore") as f:
-                        lines = f.readlines()
+    pdf.output(output)
+    print(f"✅ PDF generado: {output}")
 
-                    pdf.add_page()
-                    pdf.set_font("Courier", style='B', size=11)
-                    ruta_visible = os.path.join(os.path.normpath(input_path), relative_path).replace(os.path.abspath('.') + os.sep, '')
-                    pdf.multi_cell(0, 7, f"{ruta_visible}\n", new_x="LMARGIN", new_y="NEXT")
 
-                    pdf.set_font("Courier", size=9)
-                    for line in lines:
-                        sanitized_line = line.encode("latin-1", "replace").decode("latin-1")
-                        pdf.multi_cell(0, 5, sanitized_line, new_x="LMARGIN", new_y="NEXT")
+# --------------------------------------------------------------------------- #
+# Salida TXT
+# --------------------------------------------------------------------------- #
+def export_txt(output: Path, arbol: dict, files: list):
+    def arbol_txt(nodo: dict, indent: int = 0):
+        for k, v in sorted(nodo.items()):
+            if k == "__files__":
+                for f in sorted(v):
+                    yield " " * indent + f"- {f}"
+            else:
+                yield " " * indent + f"[{k}]/"
+                yield from arbol_txt(v, indent + 4)
 
-                except Exception as e:
-                    print(f"⚠️ No se pudo leer {path}: {e}")
+    with output.open("w", encoding="utf-8") as fh:
+        fh.write("# Árbol de archivos\n")
+        fh.write("\n".join(arbol_txt(arbol)))
+        fh.write("\n\n# Contenido de archivos\n\n")
+        for rel_path, lines in files:
+            fh.write(f"## {rel_path}\n")
+            fh.writelines(lines)
+            fh.write("\n")
+    print(f"✅ TXT generado: {output}")
 
-    output_path = f"{output_name}.pdf"
-    pdf.output(output_path)
-    print(f"\n✅ PDF generado: {output_path}")
+
+# --------------------------------------------------------------------------- #
+# Salida CSV
+# --------------------------------------------------------------------------- #
+def export_csv(output: Path, files: list):
+    """
+    CSV con columnas: ruta, num_linea, contenido
+    """
+    with output.open("w", newline="", encoding="utf-8") as fh:
+        writer = csv.writer(fh)
+        writer.writerow(["path", "line_no", "content"])
+        for rel_path, lines in files:
+            for n, ln in enumerate(lines, 1):
+                writer.writerow([str(rel_path), n, ln.rstrip("\n")])
+    print(f"✅ CSV generado: {output}")
+
+
+# --------------------------------------------------------------------------- #
+# Programa principal
+# --------------------------------------------------------------------------- #
+def main():
+    print("📦 Convertidor de código")
+    base = Path(input("📂 Ruta de la carpeta del proyecto: ").strip('"')).resolve()
+    if not base.is_dir():
+        print("❌ Ruta no válida")
+        return
+
+    out_name = input("💾 Nombre de salida (sin extensión): ").strip()
+    fmt = input("📄 Formato (pdf / txt / csv): ").lower().strip()
+
+    arbol, files = scan_project(base)
+
+    output_path = base / f"{out_name}.{fmt}"
+    try:
+        if fmt == "pdf":
+            export_pdf(base, output_path, arbol, files)
+        elif fmt == "txt":
+            export_txt(output_path, arbol, files)
+        elif fmt == "csv":
+            export_csv(output_path, files)
+        else:
+            print("⚠️  Formato no reconocido. Elige pdf, txt o csv.")
+    except Exception as e:
+        print(f"❌ Error generando salida: {e}")
+
 
 if __name__ == "__main__":
-    try:
-        from fpdf import FPDF  # fpdf2 también se importa así
-    except ImportError:
-        print("❗ Debes instalar la librería FPDF2 primero:")
-        print("   pip install fpdf2")
-    else:
-        main()
+    main()
