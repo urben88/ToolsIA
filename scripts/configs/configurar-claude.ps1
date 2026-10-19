@@ -1,11 +1,14 @@
 ﻿# configurar-claude.ps1
 # Instala la configuración global de Claude Code:
-#   - ~/.claude/CLAUDE.md          (equipo, modos PLAN/EJECUTAR, memoria, carga mental, estilo)
+#   - ~/.claude/CLAUDE.md          (equipo, modos PLAN/EJECUTAR, delegar con contexto justo, memoria,
+#                                    bitácora, carga mental, estilo)
 #   - ~/.claude/agents/coder.md    (Sonnet - resolutor)
 #   - ~/.claude/agents/explorer.md (Haiku  - investigador)
 #   - ~/.claude/agents/helper.md   (Haiku  - ejecutor mecánico)
-#   - ~/.claude/hooks/*.js         (nota de última sesión por proyecto con Haiku + aviso de contexto)
+#   - ~/.claude/hooks/*.js         (nota de última sesión por proyecto con Haiku + aviso de contexto
+#                                    + bitácora diaria en ~/.claude/bitacora/)
 #     + registra los hooks SessionStart/SessionEnd/UserPromptSubmit en settings.json (requiere Node)
+#     + bloquea los agentes integrados Explore y general-purpose (para delegar siempre en los propios)
 # Hace copia de seguridad de lo que ya exista en ~/.claude/backup/<fecha>/
 #
 # Uso:  powershell -ExecutionPolicy Bypass -File .\configurar-claude.ps1
@@ -57,7 +60,29 @@ Los agentes son **genéricos**: sirven para cualquier problema (código, datos, 
 
 **Si falta contexto, pregunta al usuario** en vez de suponer: qué se busca, para quién, límites, prioridades… Agrupa las preguntas (pocas y concretas) y propón una opción por defecto en cada una. Si un agente devuelve dudas que solo el usuario puede resolver, trasládaselas.
 
-Decide tú solo lo transversal (arquitectura global, varios módulos, contratos públicos, riesgos). `coder` decide lo local. Para iterar con un agente, **reanúdalo con SendMessage**. Ediciones de 1–2 líneas ya localizadas: hazlas tú.
+Decide tú solo lo transversal (arquitectura global, varios módulos, contratos públicos, riesgos). `coder` decide lo local. Para iterar con un agente, **reanúdalo con SendMessage**.
+
+## Delegar por defecto (Opus casi no ejecuta)
+Opus piensa, decide y revisa. **El trabajo lo hacen los agentes.** Ante la duda, delega.
+- **Buscar, leer, contar, comprobar, diagnosticar, web → `explorer`** (Haiku). Lanza varios en paralelo. Opus solo lee él mismo un archivo concreto ya localizado.
+- **Cambios ya decididos → `helper`** (Haiku): ediciones, varios archivos, plantillas, actualizar docs o memoria.
+- **Cambios que piden criterio → `coder`** (Sonnet): diseño local, depurar, scripts nuevos.
+- Opus solo edita él mismo 1–2 líneas ya localizadas.
+- **Usa siempre los agentes propios** (`explorer`, `helper`, `coder`). Nunca `Explore`, `Plan` ni `general-purpose`: corren con modelos más caros.
+
+**Contexto justo (no compartas la conversación, comparte lo necesario).** Todo encargo usa esta plantilla:
+```
+Objetivo: …
+Ya sabemos: … (para no repetir búsquedas)
+Dónde: rutas, líneas, URLs o datos de entrada
+No hagas: …
+Contexto: <ruta>   (solo si existe; ver abajo)
+Devuelve: máx. N líneas
+```
+- **Con repo y memoria:** `Contexto:` = la memoria del repo (ver sección siguiente).
+- **Sin repo** (investigación, preguntas, documentos sueltos): el encargo lleva todo dentro. Si el contexto pasa de ~15 líneas o lo usan varios agentes, escríbelo **una vez** en `contexto.md` dentro del scratchpad de la sesión (o en `~/.claude/contexto/<tema>.md` si no hay scratchpad) y pasa la ruta.
+- Actualiza el contexto solo en hitos (decisión, hallazgo, cambio), no en cada encargo. Solo lo escriben Opus o `helper`, nunca agentes en paralelo.
+- **Para seguir con un agente, reanúdalo con `SendMessage`** (conserva lo que ya leyó). No uses fork salvo que haga falta todo el hilo: gasta más y corre con Opus.
 
 ## Memoria compartida del repo
 Al empezar una tarea de varios pasos en un repo:
@@ -66,6 +91,15 @@ Al empezar una tarea de varios pasos en un repo:
 3. Pasa la ruta a los agentes en cada encargo ("Memoria: `<ruta>`").
 
 Contenido (máx. ~80 líneas, poda lo viejo): **Objetivo**, **Plan**, **Decisiones**, **Hallazgos**, **Cambios**, **Pendiente**.
+
+## Bitácora de sesión (siempre activa)
+Objetivo: no perder el hilo si la sesión se cierra de golpe. Es solo historial: muy breve y sencillo.
+- **Dónde:** `~/.claude/bitacora/AAAA-MM-DD.md` (un archivo por día, para todos los proyectos). Créalo si no existe; no hace falta pedir permiso.
+- **Cuándo:** escribe **sobre la marcha**, tras cada paso relevante (encargo recibido, decisión, cambio hecho, pendiente). No esperes al final de la sesión.
+- **Formato:** una línea por paso, añadida al final del archivo:
+  `- HH:MM · <carpeta o proyecto> · <qué se pidió / hizo / decidió / queda pendiente>`
+- Sin detalles técnicos largos ni datos sensibles (contraseñas, claves, datos personales).
+- Si el usuario pregunta qué pasó en otro momento, consulta primero la bitácora.
 
 ## Cuidar la carga mental del usuario (evitar "AI brain fry")
 Comportamiento **siempre activo por defecto**, en todos los proyectos. Objetivo: que el usuario no se sature supervisando IA ni pierda comprensión de su propio trabajo. Sé **leve**: sin sermones, máximo una nota breve por respuesta y solo cuando aporte.
@@ -104,8 +138,9 @@ Eres **coder**, el resolutor del equipo. Sirves para cualquier problema. El orqu
 - Sin modo indicado → **PLAN**.
 
 ## Antes de empezar
-- Lee la memoria del repo si el encargo indica su ruta ("Memoria: …"). Si no la indica, no crees una: menciónalo en tu resumen.
-- Para reunir información, delega en **explorer** (Haiku, barato), en paralelo si son varias preguntas.
+- Lee el archivo de contexto o memoria si el encargo indica su ruta ("Contexto: …" o "Memoria: …"). Si no la indica, no crees una: menciónalo en tu resumen. No repitas lo que el encargo da en "Ya sabemos".
+- Para reunir información, delega en **explorer** (Haiku, barato), en paralelo si son varias preguntas. Pásale contexto justo: Objetivo, Ya sabemos, Dónde, No hagas, Contexto (ruta, si hay) y Devuelve (máx. N líneas).
+- Para seguir con un agente que ya usaste, reanúdalo con SendMessage en vez de lanzar otro.
 - Para cambios mecánicos ya decididos (solo en EJECUTAR), delega en **helper** con instrucciones exactas.
 
 ## Tu trabajo
@@ -156,7 +191,7 @@ Eres **explorer**, un investigador rápido y económico. Sirves para cualquier p
 - **No cambias nada**: ni archivos ni estado del sistema.
 
 ## Contexto
-Si el encargo indica la memoria del repo ("Memoria: …"), léela primero. Si te piden buscar dónde guardar memoria, informa de los sitios candidatos que existan (`MEMORIA.md`, `NOTAS.md`, `.claude/context.md`, `docs/`, `openspec/`, `CLAUDE.md`…).
+Si el encargo indica un archivo de contexto o memoria ("Contexto: …" o "Memoria: …"), léelo primero y no lo modifiques. No repitas lo que el encargo da en "Ya sabemos". Si te piden buscar dónde guardar memoria, informa de los sitios candidatos que existan (`MEMORIA.md`, `NOTAS.md`, `.claude/context.md`, `docs/`, `openspec/`, `CLAUDE.md`…).
 
 ## Respuesta (obligatorio, máx. ~15 líneas, lenguaje sencillo)
 - **Hallazgos:** puntos clave con `ruta:línea` o fuente.
@@ -183,6 +218,7 @@ Eres **helper**, un ejecutor económico de cambios ya decididos, en cualquier ti
 ## Tu trabajo
 - Aplicar exactamente lo pedido: renombrados, sustituciones, formateo, contenido a partir de un ejemplo, actualizar documentación o la memoria del repo.
 - **No decides nada.** Si la instrucción es ambigua, no encaja con lo que encuentras o requiere criterio, para y repórtalo.
+- Si el encargo indica un archivo de contexto o memoria ("Contexto: …" o "Memoria: …"), léelo primero. Modifícalo solo si te lo piden.
 - No crees archivos de memoria ni carpetas que no se te hayan pedido.
 - Si se te indica una comprobación, ejecútala al terminar.
 
@@ -202,6 +238,8 @@ Eres **helper**, un ejecutor económico de cambios ya decididos, en cualquier ti
 #   ~/.claude/ultima-sesion/<proyecto>.md. Al abrir o tras /clear, la nota se carga sola.
 # - Antes de cada mensaje se mide el contexto: aviso al pasar de 100k tokens y cada +50k
 #   (ajustable con las variables de entorno CONTEXTO_AVISO y CONTEXTO_PASO).
+# - Bitácora: cada mensaje del usuario se anota (recortado a 200 caracteres) en
+#   ~/.claude/bitacora/AAAA-MM-DD.md, y al abrir sesión se cargan las últimas líneas.
 $hooks = Join-Path $claude 'hooks'
 New-Item -ItemType Directory -Force $hooks | Out-Null
 
@@ -434,6 +472,60 @@ process.stdin.on('end', () => {
 });
 '@
 
+Guardar (Join-Path $hooks 'bitacora.js') @'
+// Bitácora diaria (~/.claude/bitacora/AAAA-MM-DD.md), común a todos los proyectos y modelos.
+// UserPromptSubmit: añade una línea con cada mensaje del usuario (recortado a 200 caracteres).
+// SessionStart: inyecta como contexto las últimas líneas de la bitácora.
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+
+if (process.env.ULTIMA_SESION_RESUMIENDO) process.exit(0); // evita bucles
+
+const DIR = path.join(os.homedir(), '.claude', 'bitacora');
+const RECORTE = 200;
+const LINEAS_INICIO = 25;
+
+const dos = n => String(n).padStart(2, '0');
+
+function anotar(prompt, cwd) {
+  const texto = String(prompt || '').replace(/\s+/g, ' ').trim();
+  if (!texto) return;
+  const corto = texto.length > RECORTE ? texto.slice(0, RECORTE) + '…' : texto;
+  const d = new Date();
+  const archivo = path.join(DIR, `${d.getFullYear()}-${dos(d.getMonth() + 1)}-${dos(d.getDate())}.md`);
+  const carpeta = path.basename(cwd || '') || '?';
+  fs.mkdirSync(DIR, { recursive: true });
+  fs.appendFileSync(archivo, `- ${dos(d.getHours())}:${dos(d.getMinutes())} · ${carpeta} · Usuario: ${corto}\n`);
+}
+
+function cargar() {
+  let archivos = [];
+  try { archivos = fs.readdirSync(DIR).filter(f => /^\d{4}-\d{2}-\d{2}\.md$/.test(f)).sort(); } catch { return; }
+  // Últimas líneas de los dos días más recientes
+  const lineas = [];
+  for (const f of archivos.slice(-2)) {
+    lineas.push(`## ${f.slice(0, -3)}`);
+    for (const l of fs.readFileSync(path.join(DIR, f), 'utf8').split('\n')) if (l.trim()) lineas.push(l);
+  }
+  if (!lineas.length) return;
+  process.stdout.write(
+    `Bitácora reciente (${DIR}; historial de todas las sesiones, puede incluir otros proyectos). ` +
+    'Úsala si el usuario pregunta por algo de otro momento:\n' + lineas.slice(-LINEAS_INICIO).join('\n') + '\n'
+  );
+}
+
+let input = '';
+process.stdin.on('data', d => (input += d));
+process.stdin.on('end', () => {
+  try {
+    const { hook_event_name, prompt, cwd } = JSON.parse(input);
+    if (hook_event_name === 'UserPromptSubmit') anotar(prompt, cwd);
+    else if (hook_event_name === 'SessionStart') cargar();
+  } catch {}
+});
+'@
+
 # Registrar los hooks en settings.json (reemplaza los suyos previos, no toca el resto)
 if (Get-Command node -ErrorAction SilentlyContinue) {
     $settings = Join-Path $claude 'settings.json'
@@ -443,7 +535,8 @@ if (Get-Command node -ErrorAction SilentlyContinue) {
     }
     $registrar = Join-Path $env:TEMP 'registrar_hooks.js'
     [System.IO.File]::WriteAllText($registrar, @'
-// Registra los hooks de "última sesión" y "control de contexto" en settings.json.
+// Registra los hooks de "última sesión", "control de contexto" y "bitácora" en settings.json,
+// y bloquea los agentes integrados caros (Explore, general-purpose).
 // Reemplaza las entradas previas de estos scripts (sin duplicar) y no toca el resto.
 const fs = require('fs'), os = require('os'), path = require('path');
 const ruta = path.join(os.homedir(), '.claude', 'settings.json');
@@ -458,13 +551,17 @@ function registrar(evento, matcher, script, timeout) {
 registrar('SessionStart', 'startup|clear', 'cargar_sesion.js', 70);
 registrar('SessionEnd', '', 'guardar_sesion.js', 10);
 registrar('UserPromptSubmit', '', 'contexto.js', 10);
+registrar('UserPromptSubmit', '', 'bitacora.js', 5);
+registrar('SessionStart', '', 'bitacora.js', 5);
+cfg.permissions = cfg.permissions || {};
+cfg.permissions.deny = [...new Set([...(cfg.permissions.deny || []), 'Agent(Explore)', 'Agent(general-purpose)'])];
 fs.writeFileSync(ruta, JSON.stringify(cfg, null, 2) + '\n');
-console.log('OK  ' + ruta + ' (hooks de última sesión y contexto)');
+console.log('OK  ' + ruta + ' (hooks de última sesión, contexto y bitácora; agentes integrados bloqueados)');
 '@, $utf8)
     node $registrar
     Remove-Item $registrar -Force
 } else {
-    Write-Warning 'Node no está instalado: no se registran los hooks de última sesión ni de contexto.'
+    Write-Warning 'Node no está instalado: no se registran los hooks (última sesión, contexto, bitácora) ni el bloqueo de agentes.'
 }
 
 if (Test-Path $backup) { Write-Host "Copia de seguridad en: $backup" }
